@@ -142,7 +142,7 @@ const SUPA_KEY = '';   // anon public key
 // ═══════ 기본 상수 ═══════
 const W=400, H=640;
 const BOARD = {x:20, y:150, w:360, h:360};
-const R=15, FRICTION=0.985, STOP=0.06, REST=0.95, MAXV=20;
+const R=13, FRICTION=0.985, STOP=0.06, REST=0.95, MAXV=20;
 const cv = document.getElementById('cv');
 const g = cv.getContext('2d');
 let DPR = Math.min(2, window.devicePixelRatio||1);
@@ -166,29 +166,64 @@ let shotQueue = [];       // 수신된 상대 발사 대기열
 function resetStones(){
   stones = [];
   let id=0;
+  // 앞줄 5개 + 뒷줄 4개(엇갈림) = 각 9개, 연쇄 충돌이 잘 나는 배치
+  for(let i=0;i<5;i++){
+    const x = BOARD.x + 40 + i*70;
+    stones.push({id:id++, color:'B', x, y:BOARD.y+BOARD.h-30, vx:0, vy:0, alive:true, fall:0});
+    stones.push({id:id++, color:'W', x, y:BOARD.y+30, vx:0, vy:0, alive:true, fall:0});
+  }
   for(let i=0;i<4;i++){
-    const x = BOARD.x + 60 + i*80;
-    stones.push({id:id++, color:'B', x, y:BOARD.y+BOARD.h-34, vx:0, vy:0, alive:true, fall:0});
-    stones.push({id:id++, color:'W', x, y:BOARD.y+34, vx:0, vy:0, alive:true, fall:0});
+    const x = BOARD.x + 75 + i*70;
+    stones.push({id:id++, color:'B', x, y:BOARD.y+BOARD.h-64, vx:0, vy:0, alive:true, fall:0});
+    stones.push({id:id++, color:'W', x, y:BOARD.y+64, vx:0, vy:0, alive:true, fall:0});
   }
   turn='B'; simulating=false; gameOver=false; aiming=null;
   rematchMe=false; rematchOpp=false;
 }
 
 // ═══════ 사운드 (WebAudio 합성) ═══════
-let AC=null;
+let AC=null, noiseBuf=null, lastClackT=0;
 function ensureAudio(){
-  if(!AC) AC = new (window.AudioContext||window.webkitAudioContext)();
+  if(!AC){
+    AC = new (window.AudioContext||window.webkitAudioContext)();
+    // 화이트노이즈 버퍼 (돌 부딪히는 타격의 몸통)
+    noiseBuf = AC.createBuffer(1, AC.sampleRate*0.06, AC.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for(let i=0;i<d.length;i++) d[i] = (Math.random()*2-1) * Math.pow(1-i/d.length, 2);
+  }
   if(AC.state==='suspended') AC.resume();
 }
+// 리얼 바둑돌 충돌음: 노이즈 타격 + 고음 핑(돌 울림) + 저음 퉁(질량감) 3겹
 function clack(vol){
   if(!AC) return;
-  const t=AC.currentTime, o=AC.createOscillator(), ga=AC.createGain();
-  o.type='triangle'; o.frequency.setValueAtTime(700+Math.random()*200,t);
-  o.frequency.exponentialRampToValueAtTime(180,t+0.06);
-  ga.gain.setValueAtTime(Math.min(0.4,vol),t);
-  ga.gain.exponentialRampToValueAtTime(0.001,t+0.07);
-  o.connect(ga).connect(AC.destination); o.start(t); o.stop(t+0.08);
+  const now = AC.currentTime;
+  if(now - lastClackT < 0.025) return;   // 연쇄충돌 시 소리 폭주 방지
+  lastClackT = now;
+  const v = Math.min(1, vol);
+  // ① 타격 노이즈 (밴드패스 2~3kHz)
+  const src=AC.createBufferSource(); src.buffer=noiseBuf;
+  const bp=AC.createBiquadFilter(); bp.type='bandpass';
+  bp.frequency.value = 2300+Math.random()*900; bp.Q.value=1.1;
+  const g1=AC.createGain();
+  g1.gain.setValueAtTime(v*1.6, now);
+  g1.gain.exponentialRampToValueAtTime(0.001, now+0.055);
+  src.connect(bp).connect(g1).connect(AC.destination); src.start(now);
+  // ② 돌 울림 핑 (3kHz대 사인, 아주 짧게)
+  const o=AC.createOscillator(); o.type='sine';
+  o.frequency.setValueAtTime(3100+Math.random()*700, now);
+  o.frequency.exponentialRampToValueAtTime(2300, now+0.04);
+  const g2=AC.createGain();
+  g2.gain.setValueAtTime(v*0.5, now);
+  g2.gain.exponentialRampToValueAtTime(0.001, now+0.045);
+  o.connect(g2).connect(AC.destination); o.start(now); o.stop(now+0.06);
+  // ③ 질량감 저음
+  const o2=AC.createOscillator(); o2.type='triangle';
+  o2.frequency.setValueAtTime(190, now);
+  o2.frequency.exponentialRampToValueAtTime(85, now+0.05);
+  const g3=AC.createGain();
+  g3.gain.setValueAtTime(v*0.4, now);
+  g3.gain.exponentialRampToValueAtTime(0.001, now+0.06);
+  o2.connect(g3).connect(AC.destination); o2.start(now); o2.stop(now+0.07);
 }
 function fallSnd(){
   if(!AC) return;
@@ -235,7 +270,7 @@ function stepPhysics(){
         b.x+=nx*overlap; b.y+=ny*overlap;
         const avn=a.vx*nx+a.vy*ny, bvn=b.vx*nx+b.vy*ny;
         const impact=Math.abs(avn-bvn);
-        if(impact>0.1) clack(impact*0.04);
+        if(impact>0.1) clack(impact*0.07);
         const aTan={x:a.vx-avn*nx, y:a.vy-avn*ny};
         const bTan={x:b.vx-bvn*nx, y:b.vy-bvn*ny};
         a.vx=aTan.x+bvn*nx*REST; a.vy=aTan.y+bvn*ny*REST;
@@ -294,14 +329,15 @@ function draw(){
       const len=pow*7;
       const x=vx2sx(s.x), y=vy2sy(s.y);
       const fx = viewFlip ? -1 : 1;
-      g.strokeStyle='rgba(232,163,61,0.9)'; g.lineWidth=3; g.setLineDash([6,5]);
-      g.beginPath(); g.moveTo(x,y);
-      g.lineTo(x+Math.cos(ang)*len*fx, y+Math.sin(ang)*len*fx);
-      g.stroke(); g.setLineDash([]);
       const hx=x+Math.cos(ang)*len*fx, hy=y+Math.sin(ang)*len*fx;
-      g.fillStyle='rgba(232,163,61,0.9)';
-      g.beginPath();
-      g.arc(hx,hy,5,0,7); g.fill();
+      // 어두운 외곽선 + 밝은 빨강 점선 (바닥판 대비 극대화)
+      g.strokeStyle='rgba(0,0,0,0.65)'; g.lineWidth=6; g.lineCap='round';
+      g.beginPath(); g.moveTo(x,y); g.lineTo(hx,hy); g.stroke();
+      g.strokeStyle='#ff3b30'; g.lineWidth=3; g.setLineDash([7,6]);
+      g.beginPath(); g.moveTo(x,y); g.lineTo(hx,hy); g.stroke();
+      g.setLineDash([]);
+      g.fillStyle='#ff3b30'; g.strokeStyle='#fff'; g.lineWidth=2;
+      g.beginPath(); g.arc(hx,hy,6,0,7); g.fill(); g.stroke();
       // 파워 게이지
       g.fillStyle='#0008'; g.fillRect(W/2-60, H-90, 120, 10);
       g.fillStyle = pow>MAXV*0.85 ? '#d9534f' : '#e8a33d';
