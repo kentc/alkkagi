@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>알까기 대전</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1a1611">
+<meta property="og:title" content="알까기 대전">
+<meta property="og:description" content="친구와 온라인 알까기 한 판! 링크 누르면 바로 대국 시작.">
+<style>
+  :root{
+    --wood:#d9a05b; --wood-dk:#7a5230; --bg:#1a1611; --panel:#2a241b;
+    --ink:#f0e8d8; --dim:#9a8f7a; --accent:#e8a33d; --danger:#d9534f; --ok:#5cb85c;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0;padding:0}
+  body{
+    min-height:100vh; background:var(--bg); color:var(--ink);
+    font-family:"Segoe UI", system-ui, sans-serif;
+    display:flex; flex-direction:column; align-items:center;
+    -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
+    overscroll-behavior:none; touch-action:manipulation;
+  }
+  .screen{width:100%; max-width:480px; padding:24px 20px calc(24px + env(safe-area-inset-bottom)); display:none; flex-direction:column; align-items:center}
+  .screen.on{display:flex}
+  h1{font-size:44px; margin:40px 0 6px; letter-spacing:.05em}
+  h1 .go{color:var(--accent)}
+  .sub{color:var(--dim); font-size:14px; margin-bottom:40px; letter-spacing:.15em}
+  .btn{
+    width:100%; max-width:320px; padding:16px; margin:7px 0; font-size:17px; font-weight:700;
+    background:var(--panel); color:var(--ink); border:1px solid #4a4032; border-radius:14px;
+    cursor:pointer; text-align:center;
+  }
+  .btn:active{background:#3a3226}
+  .btn.primary{background:var(--accent); color:#241a08; border-color:#f0be6a}
+  .btn.ghost{background:transparent; border-color:#3a3226; color:var(--dim); font-weight:400; font-size:14px; padding:12px}
+  .btn:disabled{opacity:.45}
+  input.code{
+    width:100%; max-width:320px; padding:14px; margin:6px 0; font-size:24px; text-align:center;
+    letter-spacing:.4em; text-transform:uppercase; font-weight:700;
+    background:#141109; color:var(--ink); border:1px solid #4a4032; border-radius:12px; outline:none;
+  }
+  .note{color:var(--dim); font-size:13px; line-height:1.8; text-align:center; margin-top:10px}
+  .note b{color:var(--accent)}
+  #gamewrap{position:relative; width:100%; max-width:480px}
+  canvas{display:block; width:100%; touch-action:none}
+  .hud{
+    position:absolute; left:0; right:0; top:0; padding:10px 14px;
+    display:flex; justify-content:space-between; align-items:center; pointer-events:none;
+    font-size:14px; font-weight:700;
+  }
+  .hud .roomtag{font-weight:400; color:var(--dim); font-size:12px; letter-spacing:.1em}
+  #overlay{
+    position:absolute; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center;
+    background:rgba(10,8,4,.72); text-align:center; padding:20px;
+  }
+  #overlay.on{display:flex}
+  #overlay .big{font-size:38px; font-weight:900; margin-bottom:8px}
+  #overlay .small{color:var(--dim); margin-bottom:24px; font-size:14px; line-height:1.7}
+  #toast{
+    position:fixed; bottom:calc(30px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
+    background:#000c; color:var(--ink); padding:10px 18px; border-radius:20px; font-size:14px;
+    opacity:0; transition:opacity .3s; pointer-events:none; white-space:nowrap; z-index:50;
+  }
+  #toast.on{opacity:1}
+  .spin{
+    width:34px; height:34px; border:3px solid #4a4032; border-top-color:var(--accent);
+    border-radius:50%; animation:sp 1s linear infinite; margin:16px auto;
+  }
+  @keyframes sp{to{transform:rotate(360deg)}}
+  @media (prefers-reduced-motion: reduce){ .spin{animation-duration:2s} }
+</style>
+</head>
+<body>
+
+<!-- ══════ 메뉴 ══════ -->
+<div id="scr-menu" class="screen on">
+  <h1>알까기 <span class="go">대전</span></h1>
+  <div class="sub">FLICK &amp; KNOCK · 턴제 대전</div>
+  <button class="btn primary" id="b-online">🌐 온라인 대전 — 친구와 한 판</button>
+  <button class="btn" id="b-local">📱 한 폰으로 대결</button>
+  <button class="btn" id="b-ai">🤖 혼자 연습 (AI)</button>
+  <div class="note">검은 돌·흰 돌 번갈아 튕겨서<br>상대 돌을 바둑판 밖으로 다 떨어뜨리면 승리!</div>
+</div>
+
+<!-- ══════ 온라인 설정 ══════ -->
+<div id="scr-online" class="screen">
+  <h1 style="font-size:30px">온라인 대전</h1>
+  <div class="sub">방 코드로 연결</div>
+  <button class="btn primary" id="b-create">방 만들기</button>
+  <div class="note" style="margin:14px 0">— 또는 —</div>
+  <input class="code" id="in-code" maxlength="4" placeholder="CODE" autocomplete="off">
+  <button class="btn" id="b-join">코드로 입장</button>
+  <button class="btn ghost" id="b-back1">← 메뉴로</button>
+  <div class="note" id="online-note"></div>
+</div>
+
+<!-- ══════ 대기실 ══════ -->
+<div id="scr-wait" class="screen">
+  <h1 style="font-size:30px">대기 중</h1>
+  <div class="sub">친구를 기다리는 중...</div>
+  <div style="font-size:52px; font-weight:900; letter-spacing:.35em; color:var(--accent); margin:10px 0" id="wait-code"></div>
+  <div class="spin"></div>
+  <button class="btn primary" id="b-share">📤 친구에게 초대 링크 보내기</button>
+  <button class="btn ghost" id="b-back2">← 취소</button>
+  <div class="note">친구가 링크를 누르거나 코드를 입력하면<br>자동으로 대국이 시작됩니다</div>
+</div>
+
+<!-- ══════ 게임 ══════ -->
+<div id="scr-game" class="screen" style="padding:0">
+  <div id="gamewrap">
+    <canvas id="cv"></canvas>
+    <div class="hud">
+      <span id="hud-left"></span>
+      <span class="roomtag" id="hud-room"></span>
+      <span id="hud-right"></span>
+    </div>
+    <div id="overlay">
+      <div class="big" id="ov-title"></div>
+      <div class="small" id="ov-sub"></div>
+      <button class="btn primary" id="b-rematch" style="max-width:260px">다시 한 판</button>
+      <button class="btn ghost" id="b-exit" style="max-width:260px">메뉴로 나가기</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script>
+'use strict';
+/* ═══════════════════════════════════════════════════════
+   알까기 대전 v1 — 턴제 네트워크 게임 플랫폼 1호
+   구조: [물리] [렌더] [입력] [AI] [TurnNet(재사용 모듈)] [게임 흐름]
+═══════════════════════════════════════════════════════ */
+
+// ── Supabase 설정 (키를 넣으면 온라인 모드 활성화) ──
+const SUPA_URL = '';   // 예: https://xxxx.supabase.co
+const SUPA_KEY = '';   // anon public key
+
+// ═══════ 기본 상수 ═══════
+const W=400, H=640;
+const BOARD = {x:20, y:150, w:360, h:360};
+const R=15, FRICTION=0.985, STOP=0.06, REST=0.95, MAXV=20;
+const cv = document.getElementById('cv');
+const g = cv.getContext('2d');
+let DPR = Math.min(2, window.devicePixelRatio||1);
+cv.width = W*DPR; cv.height = H*DPR;
+g.scale(DPR,DPR);
+
+// ═══════ 게임 상태 ═══════
+let stones = [];          // {id,color:'B'|'W',x,y,vx,vy,alive,fall}
+let turn = 'B';           // 현재 턴
+let simulating = false;
+let gameMode = null;      // 'ai' | 'local' | 'online'
+let myColor = 'B';        // 온라인/AI에서 나의 색
+let viewFlip = false;     // 온라인 백돌 시점 뒤집기
+let gameOver = false;
+let aiming = null;        // {stone, sx, sy, cx, cy}
+let net = null;
+let roomCode = '';
+let rematchMe=false, rematchOpp=false;
+let shotQueue = [];       // 수신된 상대 발사 대기열
+
+function resetStones(){
+  stones = [];
+  let id=0;
+  for(let i=0;i<4;i++){
+    const x = BOARD.x + 60 + i*80;
+    stones.push({id:id++, color:'B', x, y:BOARD.y+BOARD.h-34, vx:0, vy:0, alive:true, fall:0});
+    stones.push({id:id++, color:'W', x, y:BOARD.y+34, vx:0, vy:0, alive:true, fall:0});
+  }
+  turn='B'; simulating=false; gameOver=false; aiming=null;
+  rematchMe=false; rematchOpp=false;
+}
+
+// ═══════ 사운드 (WebAudio 합성) ═══════
+let AC=null;
+function ensureAudio(){
+  if(!AC) AC = new (window.AudioContext||window.webkitAudioContext)();
+  if(AC.state==='suspended') AC.resume();
+}
+function clack(vol){
+  if(!AC) return;
+  const t=AC.currentTime, o=AC.createOscillator(), ga=AC.createGain();
+  o.type='triangle'; o.frequency.setValueAtTime(700+Math.random()*200,t);
+  o.frequency.exponentialRampToValueAtTime(180,t+0.06);
+  ga.gain.setValueAtTime(Math.min(0.4,vol),t);
+  ga.gain.exponentialRampToValueAtTime(0.001,t+0.07);
+  o.connect(ga).connect(AC.destination); o.start(t); o.stop(t+0.08);
+}
+function fallSnd(){
+  if(!AC) return;
+  const t=AC.currentTime, o=AC.createOscillator(), ga=AC.createGain();
+  o.type='square'; o.frequency.setValueAtTime(500,t);
+  o.frequency.exponentialRampToValueAtTime(90,t+0.3);
+  ga.gain.setValueAtTime(0.15,t); ga.gain.exponentialRampToValueAtTime(0.001,t+0.32);
+  o.connect(ga).connect(AC.destination); o.start(t); o.stop(t+0.35);
+}
+function winSnd(){
+  if(!AC) return;
+  [0,4,7,12].forEach((n,i)=>{
+    const t=AC.currentTime+i*0.12, o=AC.createOscillator(), ga=AC.createGain();
+    o.type='triangle'; o.frequency.value=523*Math.pow(2,n/12);
+    ga.gain.setValueAtTime(0.18,t); ga.gain.exponentialRampToValueAtTime(0.001,t+0.25);
+    o.connect(ga).connect(AC.destination); o.start(t); o.stop(t+0.3);
+  });
+}
+
+// ═══════ 물리 ═══════
+function stepPhysics(){
+  let anyMoving = false;
+  for(const s of stones){
+    if(!s.alive) continue;
+    if(s.fall>0){ s.fall++; if(s.fall>22){ s.alive=false; } anyMoving=true; continue; }
+    s.x += s.vx; s.y += s.vy;
+    s.vx *= FRICTION; s.vy *= FRICTION;
+    if(Math.hypot(s.vx,s.vy) < STOP){ s.vx=0; s.vy=0; } else anyMoving=true;
+    // 바둑판 이탈 → 낙하 시작
+    if(s.fall===0 && (s.x<BOARD.x || s.x>BOARD.x+BOARD.w || s.y<BOARD.y || s.y>BOARD.y+BOARD.h)){
+      s.fall=1; fallSnd();
+    }
+  }
+  // 충돌 (탄성, 등질량)
+  for(let i=0;i<stones.length;i++){
+    const a=stones[i]; if(!a.alive||a.fall>0) continue;
+    for(let j=i+1;j<stones.length;j++){
+      const b=stones[j]; if(!b.alive||b.fall>0) continue;
+      const dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy);
+      if(d>0 && d<R*2){
+        const nx=dx/d, ny=dy/d;
+        const overlap=(R*2-d)/2;
+        a.x-=nx*overlap; a.y-=ny*overlap;
+        b.x+=nx*overlap; b.y+=ny*overlap;
+        const avn=a.vx*nx+a.vy*ny, bvn=b.vx*nx+b.vy*ny;
+        const impact=Math.abs(avn-bvn);
+        if(impact>0.1) clack(impact*0.04);
+        const aTan={x:a.vx-avn*nx, y:a.vy-avn*ny};
+        const bTan={x:b.vx-bvn*nx, y:b.vy-bvn*ny};
+        a.vx=aTan.x+bvn*nx*REST; a.vy=aTan.y+bvn*ny*REST;
+        b.vx=bTan.x+avn*nx*REST; b.vy=bTan.y+avn*ny*REST;
+        anyMoving=true;
+      }
+    }
+  }
+  return anyMoving;
+}
+
+// ═══════ 렌더 ═══════
+function vx2sx(x){ return viewFlip ? W-x : x; }
+function vy2sy(y){ return viewFlip ? H-y : y; }
+function draw(){
+  g.fillStyle='#1a1611'; g.fillRect(0,0,W,H);
+  // 바둑판
+  g.fillStyle='#2e2415';
+  g.fillRect(BOARD.x-8, BOARD.y-8, BOARD.w+16, BOARD.h+16);
+  g.fillStyle='#d9a05b';
+  g.fillRect(BOARD.x, BOARD.y, BOARD.w, BOARD.h);
+  g.strokeStyle='#a8763a'; g.lineWidth=1;
+  const n=9, step=BOARD.w/(n+1);
+  for(let i=1;i<=n;i++){
+    g.beginPath(); g.moveTo(BOARD.x+i*step, BOARD.y+6); g.lineTo(BOARD.x+i*step, BOARD.y+BOARD.h-6); g.stroke();
+    g.beginPath(); g.moveTo(BOARD.x+6, BOARD.y+i*step); g.lineTo(BOARD.x+BOARD.w-6, BOARD.y+i*step); g.stroke();
+  }
+  g.fillStyle='#a8763a';
+  [[3,3],[7,3],[3,7],[7,7],[5,5]].forEach(([a,b])=>{
+    g.beginPath(); g.arc(BOARD.x+a*step, BOARD.y+b*step, 3, 0, 7); g.fill();
+  });
+  // 돌
+  for(const s of stones){
+    if(!s.alive) continue;
+    const sc = s.fall>0 ? Math.max(0.05, 1-s.fall/22) : 1;
+    const al = s.fall>0 ? Math.max(0, 1-s.fall/22) : 1;
+    const x=vx2sx(s.x), y=vy2sy(s.y);
+    g.save(); g.globalAlpha=al;
+    g.beginPath(); g.arc(x, y+2, R*sc, 0, 7);
+    g.fillStyle='rgba(0,0,0,0.3)'; g.fill();
+    g.beginPath(); g.arc(x, y, R*sc, 0, 7);
+    g.fillStyle = s.color==='B' ? '#1c1c22' : '#f2f0ea'; g.fill();
+    g.beginPath(); g.arc(x-4*sc, y-5*sc, R*0.35*sc, 0, 7);
+    g.fillStyle = s.color==='B' ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.8)'; g.fill();
+    g.strokeStyle = s.color==='B' ? '#000' : '#c8c4b8'; g.lineWidth=1;
+    g.beginPath(); g.arc(x, y, R*sc, 0, 7); g.stroke();
+    g.restore();
+  }
+  // 조준선
+  if(aiming && aiming.stone){
+    const s=aiming.stone;
+    const dx=aiming.sx-aiming.cx, dy=aiming.sy-aiming.cy;
+    const pow=Math.min(MAXV, Math.hypot(dx,dy)*0.15);
+    if(pow>1){
+      const ang=Math.atan2(dy,dx);
+      const len=pow*7;
+      const x=vx2sx(s.x), y=vy2sy(s.y);
+      const fx = viewFlip ? -1 : 1;
+      g.strokeStyle='rgba(232,163,61,0.9)'; g.lineWidth=3; g.setLineDash([6,5]);
+      g.beginPath(); g.moveTo(x,y);
+      g.lineTo(x+Math.cos(ang)*len*fx, y+Math.sin(ang)*len*fx);
+      g.stroke(); g.setLineDash([]);
+      const hx=x+Math.cos(ang)*len*fx, hy=y+Math.sin(ang)*len*fx;
+      g.fillStyle='rgba(232,163,61,0.9)';
+      g.beginPath();
+      g.arc(hx,hy,5,0,7); g.fill();
+      // 파워 게이지
+      g.fillStyle='#0008'; g.fillRect(W/2-60, H-90, 120, 10);
+      g.fillStyle = pow>MAXV*0.85 ? '#d9534f' : '#e8a33d';
+      g.fillRect(W/2-60, H-90, 120*pow/MAXV, 10);
+    }
+  }
+  // 턴 안내
+  if(!gameOver && !simulating){
+    g.font='bold 16px sans-serif'; g.textAlign='center';
+    const myTurn = (gameMode==='local') || (turn===myColor);
+    g.fillStyle = myTurn ? '#e8a33d' : '#9a8f7a';
+    let msg;
+    if(gameMode==='local') msg = (turn==='B'?'⚫ 검은 돌':'⚪ 흰 돌')+' 차례 — 돌을 당겨서 발사!';
+    else if(myTurn) msg = '내 차례! 내 돌을 당겨서 발사';
+    else msg = gameMode==='ai' ? 'AI가 생각 중...' : '상대방 차례를 기다리는 중...';
+    g.fillText(msg, W/2, H-40);
+  }
+}
+
+// ═══════ 입력 ═══════
+function canControl(){
+  if(gameOver||simulating) return false;
+  if(gameMode==='local') return true;
+  return turn===myColor;
+}
+function controlColor(){ return gameMode==='local' ? turn : myColor; }
+function evtPos(e){
+  const r=cv.getBoundingClientRect();
+  const px=(e.clientX-r.left)*W/r.width, py=(e.clientY-r.top)*H/r.height;
+  return {x: viewFlip? W-px : px, y: viewFlip? H-py : py};
+}
+cv.addEventListener('pointerdown', e=>{
+  ensureAudio();
+  if(!canControl()) return;
+  const p=evtPos(e);
+  const col=controlColor();
+  let best=null, bd=1e9;
+  for(const s of stones){
+    if(!s.alive||s.color!==col) continue;
+    const d=Math.hypot(s.x-p.x, s.y-p.y);
+    if(d<R+16 && d<bd){ best=s; bd=d; }
+  }
+  if(best){
+    const r=cv.getBoundingClientRect();
+    aiming={stone:best, sx:(e.clientX-r.left)*W/r.width, sy:(e.clientY-r.top)*H/r.height, cx:0, cy:0};
+    aiming.cx=aiming.sx; aiming.cy=aiming.sy;
+    cv.setPointerCapture(e.pointerId);
+  }
+});
+cv.addEventListener('pointermove', e=>{
+  if(!aiming) return;
+  const r=cv.getBoundingClientRect();
+  aiming.cx=(e.clientX-r.left)*W/r.width;
+  aiming.cy=(e.clientY-r.top)*H/r.height;
+});
+cv.addEventListener('pointerup', e=>{
+  if(!aiming) return;
+  const dx=aiming.sx-aiming.cx, dy=aiming.sy-aiming.cy;
+  const dist=Math.hypot(dx,dy);
+  const s=aiming.stone;
+  aiming=null;
+  if(dist<10) return;
+  const pow=Math.min(MAXV, dist*0.15);
+  const ang=Math.atan2(dy,dx);
+  const fx = viewFlip ? -1 : 1;
+  fireShot(s.id, Math.cos(ang)*pow*fx, Math.sin(ang)*pow*fx, true);
+});
+
+// ═══════ 발사 & 시뮬레이션 ═══════
+function fireShot(stoneId, vx, vy, isLocal){
+  const s = stones.find(o=>o.id===stoneId);
+  if(!s || !s.alive) return;
+  s.vx=vx; s.vy=vy;
+  simulating=true;
+  if(isLocal && gameMode==='online' && net){
+    net.send('shot', {id:stoneId, vx, vy});
+  }
+}
+function endTurn(){
+  simulating=false;
+  // 온라인: 쏜 쪽이 최종 배치를 브로드캐스트 (권위 동기화)
+  if(gameMode==='online' && net && turn===myColor){
+    net.send('sync', {stones: stones.map(s=>({id:s.id,x:+s.x.toFixed(2),y:+s.y.toFixed(2),alive:s.alive}))});
+  }
+  const nb=stones.filter(s=>s.alive&&s.color==='B').length;
+  const nw=stones.filter(s=>s.alive&&s.color==='W').length;
+  updateHud();
+  if(nb===0||nw===0){
+    // 동시 전멸이면 쏜 쪽 승리
+    let winner = nb===0&&nw===0 ? turn : (nb===0?'W':'B');
+    return showResult(winner);
+  }
+  turn = turn==='B'?'W':'B';
+  updateHud();
+  if(shotQueue.length){ const q=shotQueue.shift(); fireShot(q.id,q.vx,q.vy,false); return; }
+  if(gameMode==='ai' && turn!==myColor) setTimeout(aiShoot, 900);
+}
+
+// ═══════ AI ═══════
+function aiShoot(){
+  if(gameOver||simulating) return;
+  const mine=stones.filter(s=>s.alive&&s.color!==myColor);
+  const yours=stones.filter(s=>s.alive&&s.color===myColor);
+  if(!mine.length||!yours.length) return;
+  let best=null, bd=1e9;
+  for(const m of mine) for(const y of yours){
+    const d=Math.hypot(m.x-y.x,m.y-y.y);
+    if(d<bd){ bd=d; best={m,y}; }
+  }
+  const ang=Math.atan2(best.y.y-best.m.y, best.y.x-best.m.x) + (Math.random()-0.5)*0.09;
+  const pow=Math.min(MAXV, bd*0.055+7+Math.random()*2);
+  fireShot(best.m.id, Math.cos(ang)*pow, Math.sin(ang)*pow, false);
+}
+
+// ═══════ TurnNet — 재사용 가능한 턴제 네트워크 모듈 ═══════
+class TurnNet {
+  constructor(url, key){
+    this.sb = window.supabase.createClient(url, key);
+    this.ch = null; this.handlers = {}; this.role = null;
+  }
+  on(type, fn){ this.handlers[type]=fn; }
+  _route(payload){ const h=this.handlers[payload.t]; if(h) h(payload.d); }
+  async open(code, role){
+    this.role = role;
+    this.ch = this.sb.channel('alk-'+code, {
+      config:{ broadcast:{self:false}, presence:{key:role} }
+    });
+    this.ch.on('broadcast', {event:'m'}, ({payload})=>this._route(payload));
+    this.ch.on('presence', {event:'sync'}, ()=>{
+      const st = this.ch.presenceState();
+      const n = Object.keys(st).length;
+      if(this.handlers._presence) this.handlers._presence(n, st);
+    });
+    return new Promise((res,rej)=>{
+      const to=setTimeout(()=>rej(new Error('연결 시간 초과')), 10000);
+      this.ch.subscribe(async (status)=>{
+        if(status==='SUBSCRIBED'){
+          clearTimeout(to);
+          await this.ch.track({role, at:Date.now()});
+          res();
+        } else if(status==='CHANNEL_ERROR'||status==='TIMED_OUT'){
+          clearTimeout(to); rej(new Error('연결 실패: '+status));
+        }
+      });
+    });
+  }
+  send(type, data){ if(this.ch) this.ch.send({type:'broadcast', event:'m', payload:{t:type, d:data}}); }
+  close(){ if(this.ch){ this.sb.removeChannel(this.ch); this.ch=null; } }
+}
+
+// ═══════ 온라인 게임 흐름 ═══════
+const CODE_CHARS='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+function makeCode(){ let c=''; for(let i=0;i<4;i++) c+=CODE_CHARS[Math.floor(Math.random()*CODE_CHARS.length)]; return c; }
+
+async function createRoom(){
+  roomCode = makeCode();
+  net = new TurnNet(SUPA_URL, SUPA_KEY);
+  bindNetHandlers();
+  try{
+    await net.open(roomCode, 'host');
+  }catch(err){ toast('연결 실패: '+err.message); return; }
+  myColor='B'; viewFlip=false;
+  document.getElementById('wait-code').textContent = roomCode;
+  show('scr-wait');
+  net.on('_presence', (n)=>{
+    if(n>=2){ net.send('start', {}); startOnlineGame(); }
+  });
+}
+async function joinRoom(code){
+  roomCode = code.toUpperCase().trim();
+  if(roomCode.length!==4){ toast('4자리 코드를 입력하세요'); return; }
+  net = new TurnNet(SUPA_URL, SUPA_KEY);
+  bindNetHandlers();
+  try{
+    await net.open(roomCode, 'guest');
+  }catch(err){ toast('연결 실패: '+err.message); return; }
+  myColor='W'; viewFlip=true;
+  toast('입장! 호스트 확인 중...');
+  net.on('_presence', (n)=>{ if(n>=2){ startOnlineGame(); } });
+}
+function bindNetHandlers(){
+  // 게임 로직 메시지
+  netHandlersReady = true;
+}
+let netHandlersReady=false;
+function wireGameNet(){
+  net.on('shot', d=>{
+    if(simulating){ shotQueue.push(d); } else fireShot(d.id, d.vx, d.vy, false);
+  });
+  net.on('sync', d=>{
+    for(const ns of d.stones){
+      const s=stones.find(o=>o.id===ns.id);
+      if(!s) continue;
+      if(s.alive && !ns.alive){ s.alive=false; }
+      if(ns.alive){ s.x=ns.x; s.y=ns.y; s.vx=0; s.vy=0; }
+    }
+    updateHud();
+  });
+  net.on('rematch', ()=>{
+    rematchOpp=true; toast('상대가 재대결을 원합니다!');
+    if(rematchMe) restartOnline();
+  });
+  net.on('start', ()=>{});
+  net.on('bye', ()=>{ toast('상대방이 나갔습니다'); });
+  net.on('_presence', (n)=>{
+    if(n<2 && gameMode==='online' && !gameOver){
+      toast('상대방 연결이 끊겼습니다');
+    }
+  });
+}
+function startOnlineGame(){
+  gameMode='online';
+  resetStones();
+  wireGameNet();
+  show('scr-game');
+  updateHud();
+  toast(myColor==='B' ? '대국 시작! 검은 돌 선공 (나)' : '대국 시작! 상대(검은 돌) 선공');
+}
+function restartOnline(){
+  resetStones();
+  document.getElementById('overlay').classList.remove('on');
+  updateHud();
+  toast('재대결 시작!');
+}
+
+// ═══════ UI 흐름 ═══════
+function show(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on'));
+  document.getElementById(id).classList.add('on');
+}
+function toast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('on');
+  clearTimeout(t._tm); t._tm=setTimeout(()=>t.classList.remove('on'), 2600);
+}
+function updateHud(){
+  const nb=stones.filter(s=>s.alive&&s.color==='B').length;
+  const nw=stones.filter(s=>s.alive&&s.color==='W').length;
+  const L=document.getElementById('hud-left'), Rt=document.getElementById('hud-right');
+  if(gameMode==='local'){
+    L.textContent=`⚫ ×${nb}`; Rt.textContent=`⚪ ×${nw}`;
+  } else {
+    const mine = myColor==='B'?nb:nw, opp = myColor==='B'?nw:nb;
+    L.textContent=`나 ${myColor==='B'?'⚫':'⚪'} ×${mine}`;
+    Rt.textContent=`상대 ${myColor==='B'?'⚪':'⚫'} ×${opp}`;
+  }
+  document.getElementById('hud-room').textContent = gameMode==='online' ? '방 '+roomCode : '';
+}
+function showResult(winner){
+  gameOver=true;
+  const ov=document.getElementById('overlay');
+  const title=document.getElementById('ov-title'), sub=document.getElementById('ov-sub');
+  let won;
+  if(gameMode==='local'){
+    title.textContent = winner==='B' ? '⚫ 검은 돌 승리!' : '⚪ 흰 돌 승리!';
+    sub.textContent = '한 판 더?';
+    won=true;
+  } else {
+    won = winner===myColor;
+    title.textContent = won ? '🏆 승리!' : '😢 패배...';
+    title.style.color = won ? '#e8a33d' : '#9a8f7a';
+    sub.textContent = won ? '상대의 돌을 모두 떨어뜨렸습니다!' : '다음 판엔 이길 수 있어요';
+  }
+  if(won||gameMode==='local') winSnd();
+  document.getElementById('b-rematch').textContent = gameMode==='online' ? '재대결 신청' : '다시 한 판';
+  ov.classList.add('on');
+}
+
+// ═══════ 버튼 바인딩 ═══════
+const $=id=>document.getElementById(id);
+$('b-ai').onclick = ()=>{ ensureAudio(); gameMode='ai'; myColor='B'; viewFlip=false; resetStones(); show('scr-game'); updateHud(); };
+$('b-local').onclick = ()=>{ ensureAudio(); gameMode='local'; viewFlip=false; resetStones(); show('scr-game'); updateHud(); };
+$('b-online').onclick = ()=>{
+  ensureAudio();
+  if(!SUPA_URL){
+    $('online-note').innerHTML='⚠️ 온라인 서버 설정 전입니다.<br>혼자 연습·한 폰 대결은 바로 가능해요!';
+    show('scr-online');
+    $('b-create').disabled=true; $('b-join').disabled=true;
+    return;
+  }
+  $('b-create').disabled=false; $('b-join').disabled=false;
+  $('online-note').textContent='';
+  show('scr-online');
+};
+$('b-create').onclick = createRoom;
+$('b-join').onclick = ()=>joinRoom($('in-code').value);
+$('b-back1').onclick = ()=>show('scr-menu');
+$('b-back2').onclick = ()=>{ if(net) net.close(); net=null; show('scr-menu'); };
+$('b-share').onclick = async ()=>{
+  const url = location.origin+location.pathname+'?room='+roomCode;
+  if(navigator.share){
+    try{ await navigator.share({title:'알까기 대전', text:'알까기 한 판 붙자! 👊', url}); }catch(e){}
+  } else {
+    try{ await navigator.clipboard.writeText(url); toast('링크가 복사됐습니다! 카톡에 붙여넣으세요'); }
+    catch(e){ toast('링크: '+url); }
+  }
+};
+$('b-rematch').onclick = ()=>{
+  if(gameMode==='online'){
+    rematchMe=true; net.send('rematch',{});
+    if(rematchOpp) restartOnline();
+    else { $('ov-sub').textContent='상대의 수락을 기다리는 중...'; }
+  } else {
+    resetStones(); $('overlay').classList.remove('on'); updateHud();
+  }
+};
+$('b-exit').onclick = ()=>{
+  if(net){ net.send('bye',{}); net.close(); net=null; }
+  $('overlay').classList.remove('on');
+  show('scr-menu');
+};
+
+// URL로 방 입장 (?room=CODE)
+window.addEventListener('load', ()=>{
+  const code = new URLSearchParams(location.search).get('room');
+  if(code && SUPA_URL){
+    show('scr-online');
+    $('in-code').value = code.toUpperCase();
+    setTimeout(()=>joinRoom(code), 400);
+  }
+});
+
+// ═══════ 메인 루프 ═══════
+let last=performance.now(), acc=0;
+function loop(now){
+  acc += Math.min(now-last, 100); last=now;
+  while(acc >= 1000/60){
+    if(simulating){
+      const moving = stepPhysics();
+      if(!moving) endTurn();
+    }
+    acc -= 1000/60;
+  }
+  draw();
+  requestAnimationFrame(loop);
+}
+resetStones();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
