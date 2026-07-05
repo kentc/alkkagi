@@ -539,6 +539,7 @@ function wireGameNet(){
   net.on('rematch', ()=>{
     rematchOpp=true; toast('상대가 재대결을 원합니다!');
     if(rematchMe) restartOnline();
+    else { const b=document.getElementById('b-rematch'); b.textContent='✅ 재대결 수락!'; }
   });
   net.on('start', ()=>{});
   net.on('bye', ()=>{ toast('상대방이 나갔습니다'); });
@@ -558,6 +559,8 @@ function startOnlineGame(){
 }
 function restartOnline(){
   resetStones();
+  const rb=document.getElementById('b-rematch');
+  rb.textContent='재대결 신청'; rb.disabled=false;
   document.getElementById('overlay').classList.remove('on');
   updateHud();
   toast('재대결 시작!');
@@ -603,6 +606,7 @@ function showResult(winner){
   }
   if(won||gameMode==='local') winSnd();
   document.getElementById('b-rematch').textContent = gameMode==='online' ? '재대결 신청' : '다시 한 판';
+  document.getElementById('b-rematch').disabled=false;
   ov.classList.add('on');
 }
 
@@ -639,7 +643,11 @@ $('b-rematch').onclick = ()=>{
   if(gameMode==='online'){
     rematchMe=true; net.send('rematch',{});
     if(rematchOpp) restartOnline();
-    else { $('ov-sub').textContent='상대의 수락을 기다리는 중...'; }
+    else {
+      $('ov-sub').textContent='상대의 수락을 기다리는 중...';
+      $('b-rematch').textContent='⏳ 수락 대기 중...';
+      $('b-rematch').disabled=true;
+    }
   } else {
     resetStones(); $('overlay').classList.remove('on'); updateHud();
   }
