@@ -293,8 +293,9 @@ function stepPhysics(){
 }
 
 // ═══════ 렌더 ═══════
+const FLIP_CY = BOARD.y*2 + BOARD.h;   // 보드 세로 중심 기준 뒤집기 (캔버스 중심 아님)
 function vx2sx(x){ return viewFlip ? W-x : x; }
-function vy2sy(y){ return viewFlip ? H-y : y; }
+function vy2sy(y){ return viewFlip ? FLIP_CY-y : y; }
 function draw(){
   g.fillStyle='#1a1611'; g.fillRect(0,0,W,H);
   // 바둑판
@@ -377,7 +378,7 @@ function controlColor(){ return gameMode==='local' ? turn : myColor; }
 function evtPos(e){
   const r=cv.getBoundingClientRect();
   const px=(e.clientX-r.left)*W/r.width, py=(e.clientY-r.top)*H/r.height;
-  return {x: viewFlip? W-px : px, y: viewFlip? H-py : py};
+  return {x: viewFlip? W-px : px, y: viewFlip? FLIP_CY-py : py};
 }
 cv.addEventListener('pointerdown', e=>{
   ensureAudio();
