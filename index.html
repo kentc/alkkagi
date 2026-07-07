@@ -166,7 +166,7 @@ const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsI
 // ═══════ 기본 상수 ═══════
 const W=400, H=640;
 const BOARD = {x:20, y:150, w:360, h:360};
-const R=13, FRICTION=0.985, STOP=0.06, REST=0.95, MAXV=20;
+const R=13, FRICTION=0.975, STOP=0.06, REST=0.72, MAXV=17;
 const cv = document.getElementById('cv');
 const g = cv.getContext('2d');
 let DPR = Math.min(2, window.devicePixelRatio||1);
@@ -186,27 +186,28 @@ let net = null;
 let roomCode = '';
 let rematchMe=false, rematchOpp=false;
 let shotQueue = [];       // 수신된 상대 발사 대기열
+let pendingSync = null;    // 시뮬 중 도착한 권위 배치 (정착 후 적용)
 
 function resetStones(){
   stones = [];
   let id=0;
-  // 앞줄 5개 + 뒷줄 4개(엇갈림) = 각 9개, 연쇄 충돌이 잘 나는 배치
+  // 앞줄 5개 + 뒷줄 4개(엇갈림) = 각 9개. 가장자리서 넉넉히 떨어뜨려 한 방 대량낙하 방지
   for(let i=0;i<5;i++){
-    const x = BOARD.x + 40 + i*70;
-    stones.push({id:id++, color:'B', x, y:BOARD.y+BOARD.h-30, vx:0, vy:0, alive:true, fall:0});
-    stones.push({id:id++, color:'W', x, y:BOARD.y+30, vx:0, vy:0, alive:true, fall:0});
+    const x = BOARD.x + 55 + i*63;
+    stones.push({id:id++, color:'B', x, y:BOARD.y+BOARD.h-58, vx:0, vy:0, alive:true, fall:0});
+    stones.push({id:id++, color:'W', x, y:BOARD.y+58, vx:0, vy:0, alive:true, fall:0});
   }
   for(let i=0;i<4;i++){
-    const x = BOARD.x + 75 + i*70;
-    stones.push({id:id++, color:'B', x, y:BOARD.y+BOARD.h-64, vx:0, vy:0, alive:true, fall:0});
-    stones.push({id:id++, color:'W', x, y:BOARD.y+64, vx:0, vy:0, alive:true, fall:0});
+    const x = BOARD.x + 86 + i*63;
+    stones.push({id:id++, color:'B', x, y:BOARD.y+BOARD.h-94, vx:0, vy:0, alive:true, fall:0});
+    stones.push({id:id++, color:'W', x, y:BOARD.y+94, vx:0, vy:0, alive:true, fall:0});
   }
   turn='B'; simulating=false; gameOver=false; aiming=null;
   rematchMe=false; rematchOpp=false;
 }
 
 // ═══════ 사운드 (WebAudio 합성) ═══════
-let AC=null, noiseBuf=null, lastClackT=0;
+let AC=null, noiseBuf=null, longNoise=null, lastClackT=0;
 function ensureAudio(){
   if(!AC){
     AC = new (window.AudioContext||window.webkitAudioContext)();
@@ -214,8 +215,32 @@ function ensureAudio(){
     noiseBuf = AC.createBuffer(1, AC.sampleRate*0.06, AC.sampleRate);
     const d = noiseBuf.getChannelData(0);
     for(let i=0;i<d.length;i++) d[i] = (Math.random()*2-1) * Math.pow(1-i/d.length, 2);
+    // 긴 화이트노이즈 (낙하 긁힘·마찰음용, 루프 가능)
+    longNoise = AC.createBuffer(1, AC.sampleRate*1.0, AC.sampleRate);
+    const d2 = longNoise.getChannelData(0);
+    for(let i=0;i<d2.length;i++) d2[i] = Math.random()*2-1;
   }
   if(AC.state==='suspended') AC.resume();
+}
+// 노이즈 버스트 (필터 스윕) — 낙하 긁힘·타격 몸통 공용 부품
+function nzBurst(t, dur, filtType, f0, f1, vol, q){
+  const src=AC.createBufferSource(); src.buffer=longNoise;
+  const f=AC.createBiquadFilter(); f.type=filtType; f.Q.value=q||1;
+  f.frequency.setValueAtTime(f0,t);
+  if(f1) f.frequency.exponentialRampToValueAtTime(f1,t+dur);
+  const gn=AC.createGain();
+  gn.gain.setValueAtTime(vol,t); gn.gain.exponentialRampToValueAtTime(0.001,t+dur);
+  src.connect(f).connect(gn).connect(AC.destination);
+  src.start(t); src.stop(t+dur+0.02);
+}
+// 쿵/데굴 저음 타격 (바닥에 닿는 소리)
+function thud(t, vol, f0=120){
+  const o=AC.createOscillator(); o.type='sine';
+  o.frequency.setValueAtTime(f0,t); o.frequency.exponentialRampToValueAtTime(f0*0.5,t+0.09);
+  const gn=AC.createGain();
+  gn.gain.setValueAtTime(vol,t); gn.gain.exponentialRampToValueAtTime(0.001,t+0.11);
+  o.connect(gn).connect(AC.destination); o.start(t); o.stop(t+0.13);
+  nzBurst(t, 0.05, 'lowpass', 400, null, vol*0.7, 0.7);
 }
 // 리얼 바둑돌 충돌음: 노이즈 타격 + 고음 핑(돌 울림) + 저음 퉁(질량감) 3겹
 function clack(vol){
@@ -249,13 +274,43 @@ function clack(vol){
   g3.gain.exponentialRampToValueAtTime(0.001, now+0.06);
   o2.connect(g3).connect(AC.destination); o2.start(now); o2.stop(now+0.07);
 }
+// 낙하음 A: 가장자리 긁힘 → 바닥에 쿵 → 데구르르
 function fallSnd(){
   if(!AC) return;
-  const t=AC.currentTime, o=AC.createOscillator(), ga=AC.createGain();
-  o.type='square'; o.frequency.setValueAtTime(500,t);
-  o.frequency.exponentialRampToValueAtTime(90,t+0.3);
-  ga.gain.setValueAtTime(0.15,t); ga.gain.exponentialRampToValueAtTime(0.001,t+0.32);
-  o.connect(ga).connect(AC.destination); o.start(t); o.stop(t+0.35);
+  const t=AC.currentTime;
+  nzBurst(t, 0.1, 'bandpass', 1600, 500, 0.4, 1.2);   // 가장자리 긁힘
+  thud(t+0.24, 0.6, 115);                              // 바닥 쿵
+  thud(t+0.40, 0.28, 95);                              // 데굴
+  thud(t+0.52, 0.16, 85);                              // 데굴
+  thud(t+0.61, 0.09, 78);                              // 굴...
+}
+// 마찰(미끄러짐)음: 돌이 판 위를 실제로 미끄러지는 동안 지속 재생.
+// 움직이는 돌들의 총 속도에 반응 — 충돌 후 여러 돌이 흩어질 때 자연스럽게 커졌다 잦아듦.
+// 부드러운 로우패스 노이즈(날카롭지 않게).
+let slideBus=null;
+function startSlide(){
+  if(!AC || slideBus) return;
+  const src=AC.createBufferSource(); src.buffer=longNoise; src.loop=true;
+  const filt=AC.createBiquadFilter(); filt.type='lowpass'; filt.Q.value=0.4;
+  filt.frequency.value=500;
+  const gn=AC.createGain(); gn.gain.value=0;
+  src.connect(filt).connect(gn).connect(AC.destination);
+  src.start();
+  slideBus={src, filt, gn};
+}
+function updateSlide(totalSpeed){
+  if(!slideBus||!AC) return;
+  // 총 속도 → 볼륨·음색 (부드럽게 추종)
+  const vol=Math.min(0.12, totalSpeed*0.006);
+  const fq=350+Math.min(totalSpeed,40)*22;
+  slideBus.gn.gain.setTargetAtTime(vol, AC.currentTime, 0.04);
+  slideBus.filt.frequency.setTargetAtTime(fq, AC.currentTime, 0.05);
+}
+function stopSlide(){
+  if(!slideBus||!AC) return;
+  const b=slideBus; slideBus=null;
+  b.gn.gain.setTargetAtTime(0, AC.currentTime, 0.06);
+  b.src.stop(AC.currentTime+0.4);
 }
 function winSnd(){
   if(!AC) return;
@@ -268,39 +323,55 @@ function winSnd(){
 }
 
 // ═══════ 물리 ═══════
-function stepPhysics(){
-  let anyMoving = false;
-  for(const s of stones){
-    if(!s.alive) continue;
-    if(s.fall>0){ s.fall++; if(s.fall>22){ s.alive=false; } anyMoving=true; continue; }
-    s.x += s.vx; s.y += s.vy;
-    s.vx *= FRICTION; s.vy *= FRICTION;
-    if(Math.hypot(s.vx,s.vy) < STOP){ s.vx=0; s.vy=0; } else anyMoving=true;
-    // 바둑판 이탈 → 낙하 시작
-    if(s.fall===0 && (s.x<BOARD.x || s.x>BOARD.x+BOARD.w || s.y<BOARD.y || s.y>BOARD.y+BOARD.h)){
-      s.fall=1; fallSnd();
-    }
-  }
-  // 충돌 (탄성, 등질량)
+// 엔진 간 비트-결정론용 길이: Math.sqrt는 IEEE 정확반올림(엔진 무관 동일).
+// Math.hypot/sin/cos는 엔진마다 미세차가 나 온라인 물리가 갈라질 수 있어 사용 금지.
+function len(x,y){ return Math.sqrt(x*x + y*y); }
+// 충돌 해소 (탄성, 등질량) — 겹침 분리 + 접근 중일 때만 속도 교환
+function resolveCollisions(){
   for(let i=0;i<stones.length;i++){
     const a=stones[i]; if(!a.alive||a.fall>0) continue;
     for(let j=i+1;j<stones.length;j++){
       const b=stones[j]; if(!b.alive||b.fall>0) continue;
-      const dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy);
+      const dx=b.x-a.x, dy=b.y-a.y, d=len(dx,dy);
       if(d>0 && d<R*2){
         const nx=dx/d, ny=dy/d;
         const overlap=(R*2-d)/2;
         a.x-=nx*overlap; a.y-=ny*overlap;
         b.x+=nx*overlap; b.y+=ny*overlap;
         const avn=a.vx*nx+a.vy*ny, bvn=b.vx*nx+b.vy*ny;
-        const impact=Math.abs(avn-bvn);
-        if(impact>0.1) clack(impact*0.07);
-        const aTan={x:a.vx-avn*nx, y:a.vy-avn*ny};
-        const bTan={x:b.vx-bvn*nx, y:b.vy-bvn*ny};
-        a.vx=aTan.x+bvn*nx*REST; a.vy=aTan.y+bvn*ny*REST;
-        b.vx=bTan.x+avn*nx*REST; b.vy=bTan.y+avn*ny*REST;
-        anyMoving=true;
+        if(avn-bvn > 0){   // 서로 접근 중일 때만 (정지 접촉 시 튐/떨림 방지)
+          const impact=avn-bvn;
+          if(impact>0.1) clack(impact*0.07);
+          const aTan={x:a.vx-avn*nx, y:a.vy-avn*ny};
+          const bTan={x:b.vx-bvn*nx, y:b.vy-bvn*ny};
+          a.vx=aTan.x+bvn*nx*REST; a.vy=aTan.y+bvn*ny*REST;
+          b.vx=bTan.x+avn*nx*REST; b.vy=bTan.y+avn*ny*REST;
+        }
       }
+    }
+  }
+}
+function stepPhysics(){
+  let anyMoving = false;
+  // 터널링 방지: 가장 빠른 돌 기준 서브스텝 분할 (서브스텝당 이동 < R*0.5)
+  let maxSp=0;
+  for(const s of stones){ if(s.alive&&s.fall===0){ const sp=len(s.vx,s.vy); if(sp>maxSp) maxSp=sp; } }
+  const sub = Math.max(1, Math.ceil(maxSp/(R*0.5)));
+  for(let k=0;k<sub;k++){
+    for(const s of stones){
+      if(!s.alive||s.fall>0) continue;
+      s.x += s.vx/sub; s.y += s.vy/sub;
+    }
+    resolveCollisions();
+  }
+  // 마찰·정지·낙하 판정 (프레임당 1회)
+  for(const s of stones){
+    if(!s.alive) continue;
+    if(s.fall>0){ s.fall++; if(s.fall>22){ s.alive=false; } anyMoving=true; continue; }
+    s.vx *= FRICTION; s.vy *= FRICTION;
+    if(len(s.vx,s.vy) < STOP){ s.vx=0; s.vy=0; } else anyMoving=true;
+    if(s.fall===0 && (s.x<BOARD.x || s.x>BOARD.x+BOARD.w || s.y<BOARD.y || s.y>BOARD.y+BOARD.h)){
+      s.fall=1; fallSnd();
     }
   }
   return anyMoving;
@@ -436,13 +507,26 @@ function fireShot(stoneId, vx, vy, isLocal){
   const s = stones.find(o=>o.id===stoneId);
   if(!s || !s.alive) return;
   s.vx=vx; s.vy=vy;
+  startSlide();      // 미끄러짐 지속음 시작 (루프에서 총속도로 갱신)
   simulating=true;
   if(isLocal && gameMode==='online' && net){
     net.send('shot', {id:stoneId, vx, vy});
   }
 }
+// 권위 동기화 적용: 쏜 쪽이 보낸 최종 배치로 보정
+function applySync(d){
+  for(const ns of d.stones){
+    const s=stones.find(o=>o.id===ns.id);
+    if(!s) continue;
+    if(s.alive && !ns.alive){ s.alive=false; }
+    if(ns.alive){ s.x=ns.x; s.y=ns.y; s.vx=0; s.vy=0; }
+  }
+  updateHud();
+}
 function endTurn(){
   simulating=false;
+  stopSlide();   // 미끄러짐 지속음 정지
+  if(pendingSync){ applySync(pendingSync); pendingSync=null; }   // 내 시뮬 정착 후 권위 보정
   // 온라인: 쏜 쪽이 최종 배치를 브로드캐스트 (권위 동기화)
   if(gameMode==='online' && net && turn===myColor){
     net.send('sync', {stones: stones.map(s=>({id:s.id,x:+s.x.toFixed(2),y:+s.y.toFixed(2),alive:s.alive}))});
@@ -562,13 +646,8 @@ function wireGameNet(){
     if(simulating){ shotQueue.push(d); } else fireShot(d.id, d.vx, d.vy, false);
   });
   net.on('sync', d=>{
-    for(const ns of d.stones){
-      const s=stones.find(o=>o.id===ns.id);
-      if(!s) continue;
-      if(s.alive && !ns.alive){ s.alive=false; }
-      if(ns.alive){ s.x=ns.x; s.y=ns.y; s.vx=0; s.vy=0; }
-    }
-    updateHud();
+    // 받는 쪽이 아직 굴러가는 중이면 정착 후 적용 (시뮬 도중 스냅=순간이동 방지)
+    if(simulating){ pendingSync=d; } else applySync(d);
   });
   net.on('rematch', ()=>{
     rematchOpp=true; toast('상대가 재대결을 원합니다!');
@@ -774,6 +853,9 @@ function loop(now){
   while(acc >= 1000/60){
     if(simulating){
       const moving = stepPhysics();
+      // 움직이는 돌들의 총 속도 → 미끄러짐음 갱신
+      let tot=0; for(const s of stones){ if(s.alive&&s.fall===0) tot+=Math.hypot(s.vx,s.vy); }
+      updateSlide(tot);
       if(!moving) endTurn();
     }
     acc -= 1000/60;
