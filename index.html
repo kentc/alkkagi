@@ -43,6 +43,13 @@
   }
   .note{color:var(--dim); font-size:13px; line-height:1.8; text-align:center; margin-top:10px}
   .note b{color:var(--accent)}
+  .optlabel{color:var(--dim); font-size:13px; letter-spacing:.1em; width:100%; max-width:320px; margin:16px auto 6px; text-align:left}
+  .optrow{display:flex; gap:8px; width:100%; max-width:320px; justify-content:center}
+  .opt{flex:1 1 0; min-width:0; padding:12px 6px; border-radius:12px; border:1px solid #4a4032;
+       background:var(--panel); color:var(--ink); font-size:14px; font-weight:700; cursor:pointer; text-align:center; line-height:1.35}
+  .opt small{display:block; font-weight:400; color:var(--dim); font-size:11px; margin-top:2px}
+  .opt.sel{background:var(--accent); color:#241a08; border-color:#f0be6a}
+  .opt.sel small{color:#5a4212}
   #gamewrap{position:relative; width:100%; max-width:480px}
   canvas{display:block; width:100%; touch-action:none}
   .hud{
@@ -106,6 +113,27 @@
   <button class="btn" id="b-join">코드로 입장</button>
   <button class="btn ghost" id="b-back1">← 메뉴로</button>
   <div class="note" id="online-note"></div>
+</div>
+
+<!-- ══════ 게임 설정 ══════ -->
+<div id="scr-setup" class="screen">
+  <h1 style="font-size:30px">게임 설정</h1>
+  <div class="sub" id="setup-sub">방식을 고르고 시작</div>
+  <div class="optlabel">포메이션</div>
+  <div class="optrow" id="opt-formation">
+    <div class="opt" data-v="std">표준<small>기본 진형</small></div>
+    <div class="opt" data-v="cluster">밀집<small>중앙 뭉침</small></div>
+    <div class="opt" data-v="spread">전개<small>넓게</small></div>
+    <div class="opt" data-v="random">랜덤<small>무작위</small></div>
+  </div>
+  <div class="optlabel">판 규모 (돌 개수)</div>
+  <div class="optrow" id="opt-scale">
+    <div class="opt" data-v="6">빠른 판<small>6 : 6</small></div>
+    <div class="opt" data-v="9">표준<small>9 : 9</small></div>
+    <div class="opt" data-v="12">대격전<small>12 : 12</small></div>
+  </div>
+  <button class="btn primary" id="b-setup-start" style="margin-top:22px">시작</button>
+  <button class="btn ghost" id="b-setup-back">← 뒤로</button>
 </div>
 
 <!-- ══════ 대기실 ══════ -->
@@ -187,23 +215,80 @@ let roomCode = '';
 let rematchMe=false, rematchOpp=false;
 let shotQueue = [];       // 수신된 상대 발사 대기열
 let pendingSync = null;    // 시뮬 중 도착한 권위 배치 (정착 후 적용)
+// 게임 설정: formation=진형, scale=진영당 돌 개수, points=백돌(상단) 좌표(온라인은 방장이 전송)
+let gameSettings = { formation:'std', scale:9, points:null };
+let pendingMode = null;    // 설정화면에서 시작 대기 중인 모드
+
+// ── 진형 빌더: 상단(백돌) 영역에 N개 좌표 생성. 흑돌은 수직 미러로 대칭 배치 ──
+const FZ = { xMin:60, xMax:340, yMin:BOARD.y+52, yMax:BOARD.y+150 };  // 백돌 배치 존
+function fmStd(N){
+  const pts=[], cols=Math.min(5,N), colStep=60, rowStep=34;
+  let placed=0, row=0;
+  while(placed<N){
+    const inRow=Math.min(cols, N-placed), span=(inRow-1)*colStep;
+    let x0=200-span/2; if(row%2===1) x0+=colStep/2;
+    x0=Math.max(FZ.xMin, Math.min(x0, FZ.xMax-span));
+    const y=FZ.yMin+row*rowStep;
+    for(let c=0;c<inRow;c++) pts.push({x:x0+c*colStep, y});
+    placed+=inRow; row++;
+  }
+  return pts;
+}
+function fmCluster(N){
+  const s=2.2*R, cx=200, cy=BOARD.y+92, cand=[];
+  for(let r=-3;r<=3;r++) for(let c=-4;c<=4;c++){
+    const x=cx+c*s+(r&1? s/2:0), y=cy+r*(s*0.87);
+    cand.push({x,y,d:Math.hypot(x-cx,y-cy)});
+  }
+  cand.sort((a,b)=>a.d-b.d);
+  const pts=[];
+  for(const p of cand){ if(pts.length>=N)break;
+    if(p.x<FZ.xMin||p.x>FZ.xMax||p.y<FZ.yMin||p.y>FZ.yMax)continue;
+    pts.push({x:p.x,y:p.y});
+  }
+  if(pts.length<N){ const s2=fmStd(N); for(let i=pts.length;i<N;i++)pts.push(s2[i]); }
+  return pts;
+}
+function fmSpread(N){
+  const pts=[], rows=N<=6?1:(N<=10?2:3), perRow=Math.ceil(N/rows), rowStep=40;
+  let placed=0;
+  for(let r=0;r<rows;r++){
+    const inRow=Math.min(perRow, N-placed);
+    const step=inRow>1?(FZ.xMax-FZ.xMin)/(inRow-1):0, x0=inRow>1?FZ.xMin:200;
+    const y=FZ.yMin+4+r*rowStep;
+    for(let c=0;c<inRow;c++) pts.push({x:x0+c*step, y});
+    placed+=inRow;
+  }
+  return pts;
+}
+function fmRandom(N){
+  const pts=[], minD=2*R+6, W2=FZ.xMax-FZ.xMin, H2=FZ.yMax-FZ.yMin;
+  let t=0;
+  while(pts.length<N && t<4000){ t++;
+    const x=FZ.xMin+Math.random()*W2, y=FZ.yMin+Math.random()*H2;
+    if(pts.every(p=>Math.hypot(p.x-x,p.y-y)>=minD)) pts.push({x,y});
+  }
+  if(pts.length<N){ const s=fmStd(N); for(let i=pts.length;i<N;i++)pts.push(s[i]); }
+  return pts;
+}
+function buildFormation(kind,N){
+  if(kind==='cluster')return fmCluster(N);
+  if(kind==='spread')return fmSpread(N);
+  if(kind==='random')return fmRandom(N);
+  return fmStd(N);
+}
+function applyFormation(){ gameSettings.points = buildFormation(gameSettings.formation, gameSettings.scale); }
 
 function resetStones(){
-  stones = [];
-  let id=0;
-  // 앞줄 5개 + 뒷줄 4개(엇갈림) = 각 9개. 가장자리서 넉넉히 떨어뜨려 한 방 대량낙하 방지
-  for(let i=0;i<5;i++){
-    const x = BOARD.x + 55 + i*63;
-    stones.push({id:id++, color:'B', x, y:BOARD.y+BOARD.h-58, vx:0, vy:0, alive:true, fall:0});
-    stones.push({id:id++, color:'W', x, y:BOARD.y+58, vx:0, vy:0, alive:true, fall:0});
-  }
-  for(let i=0;i<4;i++){
-    const x = BOARD.x + 86 + i*63;
-    stones.push({id:id++, color:'B', x, y:BOARD.y+BOARD.h-94, vx:0, vy:0, alive:true, fall:0});
-    stones.push({id:id++, color:'W', x, y:BOARD.y+94, vx:0, vy:0, alive:true, fall:0});
+  stones = []; let id=0;
+  if(!gameSettings.points || gameSettings.points.length!==gameSettings.scale) applyFormation();
+  const mirror = BOARD.y*2 + BOARD.h;   // 수직 미러 기준선(660): 흑=백을 판 중심 기준 대칭
+  for(const p of gameSettings.points){
+    stones.push({id:id++, color:'W', x:p.x, y:p.y, vx:0, vy:0, alive:true, fall:0});
+    stones.push({id:id++, color:'B', x:p.x, y:mirror-p.y, vx:0, vy:0, alive:true, fall:0});
   }
   turn='B'; simulating=false; gameOver=false; aiming=null;
-  rematchMe=false; rematchOpp=false;
+  rematchMe=false; rematchOpp=false; pendingSync=null;
 }
 
 // ═══════ 사운드 (WebAudio 합성) ═══════
@@ -612,7 +697,11 @@ async function createRoom(forceCode){
   document.getElementById('wait-code').textContent = roomCode;
   show('scr-wait');
   net.on('_presence', (n)=>{
-    if(n>=2){ net.send('start', {}); startOnlineGame(); }
+    if(n>=2){
+      if(!gameSettings.points || gameSettings.points.length!==gameSettings.scale) applyFormation();
+      net.send('start', {settings: gameSettings});   // 방장이 룰(진형·규모·좌표)을 게스트에 전송
+      startOnlineGame();
+    }
   });
 }
 async function joinRoom(code){
@@ -625,7 +714,8 @@ async function joinRoom(code){
   }catch(err){ toast('연결 실패: '+err.message); return; }
   myColor='W'; viewFlip=true;
   toast('입장! 호스트 확인 중...');
-  net.on('_presence', (n)=>{ if(n>=2){ startOnlineGame(); } });
+  net.on('start', (d)=>{ if(d && d.settings) gameSettings=d.settings; startOnlineGame(); });  // 방장 룰 수신 후 시작
+  net.on('_presence', (n)=>{});   // 게스트는 방장의 start 신호를 기다림
   setTimeout(()=>{                   // 3초 내 호스트 부재 → 이 방코드의 방장으로 전환해 대기
     if(gameMode==='online' || !net) return;
     if(!Object.keys(net.state()).includes('host')){
@@ -746,8 +836,29 @@ function showResult(winner){
 
 // ═══════ 버튼 바인딩 ═══════
 const $=id=>document.getElementById(id);
-$('b-ai').onclick = ()=>{ ensureAudio(); gameMode='ai'; myColor='B'; viewFlip=false; resetStones(); show('scr-game'); updateHud(); };
-$('b-local').onclick = ()=>{ ensureAudio(); gameMode='local'; viewFlip=false; resetStones(); show('scr-game'); updateHud(); };
+// ── 게임 설정 화면 ──
+function renderSetup(){
+  document.querySelectorAll('#opt-formation .opt').forEach(o=>o.classList.toggle('sel', o.dataset.v===gameSettings.formation));
+  document.querySelectorAll('#opt-scale .opt').forEach(o=>o.classList.toggle('sel', +o.dataset.v===gameSettings.scale));
+}
+function openSetup(mode){
+  pendingMode=mode;
+  $('setup-sub').textContent = mode==='online-create' ? '방장이 규칙을 정합니다' : (mode==='ai'?'🤖 AI 대전 설정':'📱 한 폰 2인 설정');
+  $('b-setup-start').textContent = mode==='online-create' ? '방 만들기 →' : '시작';
+  renderSetup(); show('scr-setup');
+}
+function setupStart(){
+  ensureAudio(); applyFormation();
+  if(pendingMode==='online-create'){ createRoom(); return; }
+  gameMode=pendingMode; myColor='B'; viewFlip=false;
+  resetStones(); show('scr-game'); updateHud();
+}
+document.querySelectorAll('#opt-formation .opt').forEach(o=>o.onclick=()=>{ gameSettings.formation=o.dataset.v; renderSetup(); });
+document.querySelectorAll('#opt-scale .opt').forEach(o=>o.onclick=()=>{ gameSettings.scale=+o.dataset.v; renderSetup(); });
+$('b-setup-start').onclick = setupStart;
+$('b-setup-back').onclick = ()=>show(pendingMode==='online-create'?'scr-online':'scr-menu');
+$('b-ai').onclick = ()=>openSetup('ai');
+$('b-local').onclick = ()=>openSetup('local');
 $('b-online').onclick = ()=>{
   ensureAudio();
   if(!SUPA_URL){
@@ -760,7 +871,7 @@ $('b-online').onclick = ()=>{
   $('online-note').textContent='';
   show('scr-online');
 };
-$('b-create').onclick = createRoom;
+$('b-create').onclick = ()=>openSetup('online-create');
 $('b-join').onclick = ()=>joinRoom($('in-code').value);
 $('b-back1').onclick = ()=>show('scr-menu');
 $('b-back2').onclick = ()=>{ if(net) net.close(); net=null; show('scr-menu'); };
