@@ -535,9 +535,8 @@ function endTurn(){
   const nw=stones.filter(s=>s.alive&&s.color==='W').length;
   updateHud();
   if(nb===0||nw===0){
-    // 동시 전멸이면 쏜 쪽 승리
-    let winner = nb===0&&nw===0 ? turn : (nb===0?'W':'B');
-    return showResult(winner);
+    if(nb===0 && nw===0) return showResult('DRAW');   // 동시 전멸 = 무승부
+    return showResult(nb===0 ? 'W' : 'B');
   }
   turn = turn==='B'?'W':'B';
   updateHud();
@@ -719,6 +718,15 @@ function showResult(winner){
   const ov=document.getElementById('overlay');
   const title=document.getElementById('ov-title'), sub=document.getElementById('ov-sub');
   let won;
+  if(winner==='DRAW'){   // 동시 전멸 — 승/패·스트릭 미반영, 축하음 없음
+    title.textContent='🤝 무승부!';
+    title.style.color='#c9c0ad';
+    sub.textContent='양쪽 돌이 동시에 모두 떨어졌어요';
+    document.getElementById('b-rematch').textContent = gameMode==='online' ? '재대결 신청' : '다시 한 판';
+    document.getElementById('b-rematch').disabled=false;
+    ov.classList.add('on');
+    return;
+  }
   if(gameMode==='local'){
     title.textContent = winner==='B' ? '⚫ 검은 돌 승리!' : '⚪ 흰 돌 승리!';
     sub.textContent = '한 판 더?';
